@@ -25,6 +25,10 @@ import socket
 import pickle
 import json
 import time
+import imutils
+import itertools
+import matplotlib.pyplot as plt
+from tracker import Tracker
 
 
 # Settings --------------------------------------------------------------------
@@ -33,13 +37,15 @@ FY_DEPTH = 114.5772
 CX_DEPTH = 258.27924
 CY_DEPTH = 257.61118
 
-Obj_frame_tool = [[0,0,0],[0,-0.045,-0.05],[0,-0.095,-0.025],[0,-0.145,-0.025]]
+Obj_frame_tool = [[0,0,0], [0,-0.045,-0.05],[0,-0.09,-0.025], [0,-0.14,-0.025]]
+Obj_frame_verification = [[0,0,0,1], [0,-0.045,-0.05,1],[0,-0.09,-0.025,1], [0,-0.14,-0.025,1]]
 T_world_object = np.identity(4)
+temporal_array = []
 # HoloLens address
 host = "192.168.0.101"
 
 # Create a socket server
-server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+#server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 host2 = "127.0.0.1"  # Server IP address
 port = 3816  # Port number
 
@@ -51,7 +57,7 @@ port = 3816  # Port number
 # 0: video
 # 1: video + rig pose
 # 2: query calibration (single transfer)
-mode = hl2ss.StreamMode.MODE_0
+mode = hl2ss.StreamMode.MODE_1
 
 # Framerate denominator (must be > 0)
 # Effective framerate is framerate / divisor
@@ -61,7 +67,7 @@ divisor = 1
 profile_z = hl2ss.DepthProfile.SAME
 
 # Video encoding profile
-profile_ab = hl2ss.VideoProfile.H265_MAIN 
+profile_ab = hl2ss.VideoProfile.H265_MAIN
 
 #------------------------------------------------------------------------------
 
@@ -81,11 +87,13 @@ if (mode == hl2ss.StreamMode.MODE_2):
     quit()
 
 calibration = hl2ss_lnm.download_calibration_rm_depth_ahat(host, hl2ss.StreamPort.RM_DEPTH_AHAT)
-#T_camera_world = calibration.extrinsics
-#T_camera_world[:3,-1] = T_camera_world[-1,:3]
-#T_camera_world[-1,:3] = 0
+T_camera_rig = calibration.extrinsics
+T_camera_rig[:3,-1] = T_camera_rig[-1,:3]
+T_camera_rig[-1,:3] = 0
 
-print(calibration.intrinsics)
+print("T_cam_rig", T_camera_rig)
+
+lookup_table = hl2ss_3dcv.compute_uv2xy(calibration.intrinsics, 512, 512)
 
 enable = True
 
@@ -105,104 +113,204 @@ client.open()
 #print(f"Connection from {sock}")
 
 
-def Compute_3D_blob_coord(keys,im,depth):
+
+
+
+
+
+def KF_marker(coordinate,image,KF):
+
+    # Predict
+    (x, y) = KF.predict()
+    # Draw a rectangle as the predicted object position
+    cv2.rectangle(image, (int(x- 15), int(y- 15)), (int(x+ 15), int(y+ 15)), (0,0,255), 2)
+
+    # Update
+    (x1, y1) = KF.update(coordinate[0])
+    print(x1, y1)
+    # Draw a rectangle as the estimated object position
+    cv2.rectangle(image, (int(x1- 15), int(y1- 15)), (int(x1+ 15), int(y1+ 15)), (0,255,0), 2)
+
+    cv2.putText(image, "Estimated Position", (int(x1 + 15), int(y1 + 10)), 0, 0.5, (0,255,0), 2)
+    cv2.putText(image, "Predicted Position", (int(x + 15), int(y + 10 )), 0, 0.5, (0,0,255), 2)
+    cv2.putText(image, "Measured Position", (int(coordinate[0][0] + 15), int(coordinate[1][0] - 15)), 0, 0.5, (0,0,255), 2)
+
+    return x1, y1
+
+def _fitzpatricks_X(svd):
+    """This is from Fitzpatrick, chapter 8, page 470.
+       it's used in preference to Arun's equation 13,
+       X = np.matmul(svd[2].transpose(), svd[0].transpose())
+       to avoid reflections.
+    """
+    VU = np.matmul(svd[2].transpose(), svd[0])
+    detVU = np.linalg.det(VU)
+
+    diag = np.eye(3, 3)
+    diag[2][2] = detVU
+
+    X = np.matmul(svd[2].transpose(), np.matmul(diag, svd[0].transpose()))
+    return X
+
+
+def Compute_3D_blob_coord(keys,depth):
     key_3D = []
-    depth_image_meters = depth/1000
-    for blob in keys:
-       u = round(blob.pt[0])
-       v = round(blob.pt[1])
-       z = depth_image_meters[v][u] + 0.0054
-       x = (u - CX_DEPTH) * z / FX_DEPTH
-       y = (v - CY_DEPTH) * z / FY_DEPTH
-       key_3D.append([x, y, z])
     
-    #cleared_points = Clear_blobs(key_3D, 0.14)
-    #print(cleared_points)
-    #pcd = o3d.geometry.PointCloud()  # create point cloud object
-    #pcd.points = o3d.utility.Vector3dVector(key_3D)  # set pcd_np as the point cloud points   
-    #vis.clear_geometries()
-    #vis.add_geometry(pcd)
-    #vis.update_geometry(pcd)
-    #vis.poll_events()
-    #vis.update_renderer()   
+    for blob in keys:
+       u = int(blob.pt[0])
+       v = int(blob.pt[1])
+       z = depth[v][u]
+       #x = (u - CX_DEPTH) * z  / FX_DEPTH
+       #y = (v - CY_DEPTH) * z / FY_DEPTH
+       xy = lookup_table[u][v]
+       XYZ = [xy[0]*z,xy[1]*z,z]/np.linalg.norm([xy[0],xy[1],1])
+       XYZ_sphere = (XYZ *(1 + 0.0054/z)).tolist()
+       #print("point from function", [x,y,z])
+       key_3D.append(XYZ_sphere)
+       #print(key_3D)
+    
     return key_3D
 
-def arun_3D_reg(A, B):
-    """Solve 3D registration using Arun's method: B = RA + t
-    """
+def Kabsch_Algorithm (A,B):
+
     
-    A = np.array(A).T
-    B = np.array(B).T
-    N = B.shape[1]
+    N = A.shape[1]
+    
     T = np.array([[0.0,0.0,0.0,0.0],
                 [0.0,0.0,0.0,0.0],
                 [0.0,0.0,0.0,0.0],
                 [0.0,0.0,0.0,1]])
-    print(N)
-    if (N==3 or N==4):
-            
-            
+   
+    # calculate centroids
+    A_centroid = np.reshape(1/N * (np.sum(A, axis=1)), (3,1))
+    B_centroid = np.reshape(1/N * (np.sum(B, axis=1)), (3,1))
+    
+    # calculate the vectors from centroids
+    A_prime = A - A_centroid
+    B_prime = B - B_centroid
+    
+    # rotation estimation
+    H = np.matmul(A_prime, B_prime.transpose())
+    svd = np.linalg.svd(H)
 
-            # calculate centroids
-            A_centroid = np.reshape(1/N * (np.sum(A, axis=1)), (3,1))
-            B_centroid = np.reshape(1/N * (np.sum(B, axis=1)), (3,1))
-            
-            # calculate the vectors from centroids
-            A_prime = A - A_centroid
-            B_prime = B - B_centroid
-            
-            # rotation estimation
-            H = np.zeros([3, 3])
-            for i in range(N):
-                ai = A_prime[:, i]
-                bi = B_prime[:, i]
-                H = H + np.outer(ai, bi)
-            U, S, V_transpose = np.linalg.svd(H)
-            V = np.transpose(V_transpose)
-            U_transpose = np.transpose(U)
-            R = V @ np.diag([1, 1, np.linalg.det(V) * np.linalg.det(U_transpose)]) @ U_transpose
+    # Replace Arun Equation 13 with Fitzpatrick, chapter 8, page 470,
+    # to avoid reflections, see issue #19
+    X = _fitzpatricks_X(svd)
 
-            # translation estimation
-            t = B_centroid - R @ A_centroid
-            T[0:3,0:3] = R
-            T[0][-1] = t[0]
-            T[1][-1] = t[1]
-            T[2][-1] = t[2]
+    # Arun step 5, after equation 13.
+    det_X = np.linalg.det(X)
 
-    return T
+    if det_X < 0 and np.all(np.flip(np.isclose(svd[1], np.zeros((3, 1))))):
 
+        # Don't yet know how to generate test data.
+        # If you hit this line, please report it, and save your data.
+        raise ValueError("Registration fails as determinant < 0"
+                         " and no singular values are close enough to zero")
+
+    if det_X < 0 and np.any(np.isclose(svd[1], np.zeros((3, 1)))):
+        # Implement 2a in section VI in Arun paper.
+        v_prime = svd[2].transpose()
+        v_prime[0][2] *= -1
+        v_prime[1][2] *= -1
+        v_prime[2][2] *= -1
+        X = np.matmul(v_prime, svd[0].transpose())
+
+    # Compute output
+    R = X
+    t = B_centroid - R @ A_centroid
+    T[0:3,0:3] = R
+    T[0][-1] = t[0]
+    T[1][-1] = t[1]
+    T[2][-1] = t[2]
+    return R, t, T
+
+
+def Brute_force_matching(Measured_points):
+        
+    permuted_list = list(itertools.permutations(Measured_points))
+    Y = np.transpose(np.array(Obj_frame_tool))
+    min_err = 1000
+    for iter in range(len(permuted_list)):
+     
+        P = np.transpose(np.array(permuted_list[iter]))
+        #print(P)
+        Rot, Transl, T = Kabsch_Algorithm (P,Y)
+        error = np.linalg.norm(Rot @ P + Transl - Y, 'fro')
+        
+        if error < min_err:
+            min_err = error
+            match = P
+            match_R = Rot
+            match_t = Transl
+            T_final = T
+    
+    #print(min_err)
+    return T_final
+        
 
 
 def Blob_detector(im,depth,detector):
     
     # Detect blobs.
-    #im_conv = (im/256).astype('uint8')
-    im_conv = hl2ss_3dcv.rm_depth_to_uint8(im)
-    depth_conv = hl2ss_3dcv.rm_depth_to_uint8(depth)
     
+    im_conv = hl2ss_3dcv.rm_depth_undistort(im,calibration.undistort_map)
+    im_conv = hl2ss_3dcv.rm_depth_to_uint8(im_conv)
+    im_conv = cv2.normalize(im_conv, 100 ,200, cv2.NORM_MINMAX)
+    im_conv = cv2.GaussianBlur(im_conv,(5,5),0)
+    ret,im_conv_treshold = cv2.threshold(im_conv, 4, 255, cv2.THRESH_BINARY)
+    #kernel = np.ones((3,3),np.uint8)
+    #im_conv = cv2.dilate(im_conv_treshold, kernel, iterations = 1)
     
-    #print(depth.shape)
-    #print(im_conv.shape)
-    #cv2.imshow("Keypoints", im)
-    im_conv = cv2.GaussianBlur(im_conv, (3, 3), 1)
 
-    ret,im_conv_treshold = cv2.threshold(im_conv,5,255,cv2.THRESH_BINARY)
+    depth_normal = hl2ss_3dcv.rm_depth_normalize(depth, calibration.scale)
+    depth_undistort = hl2ss_3dcv.rm_depth_undistort(depth_normal,calibration.undistort_map)
+    depth_conv = hl2ss_3dcv.rm_depth_to_uint8(depth_undistort)   
     
-    cv2.imshow("Tresh", im_conv_treshold)
+   
+    
     keypoints = detector.detect(im_conv_treshold)
 
-    for i, keypoint in enumerate(keypoints):
-        x, y = int(keypoint.pt[0]), int(keypoint.pt[1])
-        cv2.putText(im_conv_treshold, str(i+1), (x, y ), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 255), 2)  # Annotate with numbers
-    # Draw detected blobs as red circles.
-    # cv2.DRAW_MATCHES_FLAGS_DRAW_RICH_KEYPOINTS ensures the size of the circle corresponds to the size of blob
+    # Draw the detected circle
     im_with_keypoints = cv2.drawKeypoints(im_conv_treshold, keypoints, np.array([]), (0,0,255), cv2.DRAW_MATCHES_FLAGS_DRAW_RICH_KEYPOINTS)
-    depth_with_keypoints = cv2.drawKeypoints(depth_conv, keypoints, np.array([]), (0,0,255), cv2.DRAW_MATCHES_FLAGS_DRAW_RICH_KEYPOINTS)
+    centers = []
+    corrected_keypoint = []
     
-    cv2.imshow("Keypoints", im_with_keypoints)
-    cv2.imshow("Keypoints_depth", depth_with_keypoints)
-    
-    Camera_coord = Compute_3D_blob_coord(keypoints,im,depth)
+    for i, keypoint in enumerate(keypoints):
+        centers.append(np.array([[keypoint.pt[0]], [keypoint.pt[1]]]))
+        
+
+    if (len(centers) > 0):
+        # Track object using Kalman Filter
+        tracker.Update(centers)
+        
+        # For identified object tracks draw tracking line
+        # Use various colors to indicate different track_id
+        for i in range(len(tracker.tracks)):
+            if (len(tracker.tracks[i].trace) > 1):
+                for j in range(len(tracker.tracks[i].trace)-1):
+
+                    #print("measured",(centers[i]))
+                    # Draw trace line
+                    print("updated" + str(j),(tracker.tracks[i].trace[0][0][0],tracker.tracks[i].trace[0][1][0]))
+                    x1 = tracker.tracks[i].trace[j][0][0]
+                    y1 = tracker.tracks[i].trace[j][1][0]
+                    x2 = tracker.tracks[i].trace[j+1][0][0]
+                    y2 = tracker.tracks[i].trace[j+1][1][0]
+                    clr = tracker.tracks[i].track_id % 9
+                    cv2.line(im_with_keypoints, (int(x1), int(y1)), (int(x2), int(y2)),5)
+                    cv2.rectangle(im_with_keypoints, (int(x1 - 15), int(y1 - 15)), (int(x2 + 15), int(y2 + 15)), (255, 0, 0), 2)
+
+
+
+    cv2.imshow('image', im_with_keypoints)
+
+        #im_with_keypoints = cv2.drawKeypoints(im_conv_treshold, keypoints, np.array([]), (0,0,255), cv2.DRAW_MATCHES_FLAGS_DRAW_RICH_KEYPOINTS)
+        #depth_with_keypoints = cv2.drawKeypoints(depth_conv, keypoints, np.array([]), (0,0,255), cv2.DRAW_MATCHES_FLAGS_DRAW_RICH_KEYPOINTS)
+
+        #cv2.imshow("Keypoints", im_with_keypoints)
+        #cv2.imshow("Keypoints_depth", depth_with_keypoints)
+
+    Camera_coord = Compute_3D_blob_coord(keypoints,depth_undistort)
 
     return Camera_coord
     
@@ -210,63 +318,63 @@ def Blob_detector(im,depth,detector):
 params = cv2.SimpleBlobDetector_Params()
 
 # Set the threshold
-params.minThreshold = 5
-params.maxThreshold = 200
+params.minThreshold = 100
+params.maxThreshold = 500
 
 # Set the area filter
 params.filterByArea = True
 params.minArea = 0.1
-params.maxArea = 1000
-
+params.maxArea = 200
 # Set the circularity filter
 params.filterByCircularity = True
 params.minCircularity = 0.1
-params.maxCircularity = 1
+params.maxCircularity = 100
 
 # Set the convexity filter
 params.filterByConvexity = True
 params.minConvexity = 0.1
-params.maxConvexity = 1
+params.maxConvexity = 30
 
 # Set the inertia filter
 params.filterByInertia = False
-params.minInertiaRatio = 0.01
+params.minInertiaRatio = 0.1
 params.maxInertiaRatio = 1
 
 # Set the color filter
-params.filterByColor = True
+params.filterByColor = False
 params.blobColor = 255
 
 
 # Create a detector with the parameters
-detector = cv2.SimpleBlobDetector_create(params)    
-vis = o3d.visualization.VisualizerWithKeyCallback()
-vis.create_window('viewer', 512, 512)
+detector = cv2.SimpleBlobDetector_create(params)
+
+tracker = Tracker(160, 30, 5, 100)
 
 while (enable):
 
     data = client.get_next_packet()
-    
-    #print(f'Pose at time {data.timestamp}')
-    #print(data.pose)
+
+    T_world_rig = data.pose
+    T_world_rig[:3,-1] = T_world_rig[-1,:3]
+    T_world_rig[-1,:3] = 0
+    #\print("T_world_rig", T_world_rig)
     #cv2.imshow('Depth', data.payload.depth / np.max(data.payload.depth)) # Scaled for visibility
-    #cv2.imshow('AB', data.payload.ab / np.max(data.payload.ab)) # Scaled for visibility
+    cv2.imshow('AB', data.payload.ab / np.max(data.payload.ab)) # Scaled for visibility
     
     Camera_frame_tool = Blob_detector(data.payload.ab,data.payload.depth,detector)
-    print(Camera_frame_tool)
-    #if(len(Camera_frame_tool)!=0):
-        #T_camera_obj = arun_3D_reg(Obj_frame_tool,Camera_frame_tool)
+    #temporal_array.append(Camera_frame_tool)
+    #print(Camera_frame_tool)
 
-   # if(len(T_camera_obj)!=0):
-        #T_world_object = np.linalg.inv(T_camera_world) * T_camera_obj
-        #T_world_object[2,3] = - T_world_object[2,3] 
-       # T_world_object[:3,3] /= 1000
+    if(len(Camera_frame_tool) == 4):
+
+        T_obj_camera = Brute_force_matching(np.array(Camera_frame_tool))
+        T_world_object = T_world_rig @ T_camera_rig @ np.linalg.inv(T_obj_camera)
+        T_world_object = np.round(T_world_object, decimals = 2)
         #print(T_world_object)
-    
     # Convert to a left-handed frame matrix by negating the Z-component (third column)
     
 
-    #matrixString = '\n'.join([','.join(map(str, row)) for row in T_world_object])
+    matrixString = '\n'.join([','.join(map(str, row)) for row in T_world_object])
 
     #print(matrixString)
 
@@ -275,5 +383,6 @@ while (enable):
 
     cv2.waitKey(1)
 
+#print(temporal_array)
 client.close()
 listener.join()
