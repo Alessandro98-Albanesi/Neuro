@@ -1,10 +1,9 @@
 import itertools
 import numpy as np
 import open3d as o3d
-from UKF import UKF
-from filterpy.kalman import UnscentedKalmanFilter
-from filterpy.kalman import MerweScaledSigmaPoints
-from filterpy.common import Q_discrete_white_noise 
+from scipy.optimize import linear_sum_assignment
+from filterpy.kalman import MerweScaledSigmaPoints as SigmaPoints
+
 
 def Kabsch_Algorithm (A,B):
 
@@ -166,10 +165,10 @@ for iter in range(len(permuted_list)):
 
 #result = KF_based_registration(match,Y,match_R)
 
-##print(match)
+#print(match)
 #print(result)
 #print(match_R)
-print(min_err)
+#print(min_err)
 
 C = match_R @ match + match_t
 
@@ -302,7 +301,7 @@ def compute_R(theta_x, theta_y, theta_z):
 
         return R
 
-def compute_sigma_points(x, P, alpha=0.1, beta=2.0, kappa=0.0):
+def compute_sigma_points(x, P, alpha=0.001, beta=2.0, kappa=0.0):
     """
     Compute sigma points for a 6x1 vector.
 
@@ -314,95 +313,136 @@ def compute_sigma_points(x, P, alpha=0.1, beta=2.0, kappa=0.0):
     Returns:
     - sigma_points: Array of sigma points, each column represents a sigma point
     """
-
     n = len(x)  # Dimension of the state vector
-    lambda_ = alpha 
+    lambda_ = alpha**2 * 6 
 
     # Compute the sigma points
     sigma_points = np.zeros((n, 2 * n + 1))
-
+    sigma_point = 0
     # Compute sigma points as columns of matrix X
-    sqrt_P = np.linalg.cholesky((n + lambda_) * P)
+    sqrt_P = np.linalg.cholesky(P)
 
     sigma_points[:, 0] = x  # Mean as the first sigma point
 
     for i in range(n):
-        sigma_points[:, i + 1] = x + sqrt_P[:, i]
-        sigma_points[:, n + i + 1] = x - sqrt_P[:, i]
+    
+        sigma_points[:, i + 1] = x + np.sqrt((n + lambda_))*sqrt_P[:, i]
+        sigma_points[:, n + i + 1] = x - np.sqrt((n + lambda_))*sqrt_P[:, i]
 
+    
+    
     return sigma_points
 
 
-def UKF(moving_points, fixed_points):
-
+def UKF(U_init, Y):
+        
         x_k_posterior = np.array([0,0,0,0,0,0])
         P_k_posterior = np.identity(6)
-        sigma_x = 0.01  # Example value, adjust as needed
-        sigma_y = 0.01  # Example value, adjust as needed
-        sigma_z = 0.01  # Example value, adjust as needed
-
+        sigma_x = 0.001  # Example value, adjust as needed
+        sigma_y = 0.001  # Example value, adjust as needed
+        sigma_z = 0.001  # Example value, adjust as needed
         # Create covariance matrix
         covariance_matrix_noise = np.diag([sigma_x, sigma_y, sigma_z])
-
         variances_fixed_points = np.var(Y, axis=1)
-
         w_mean = np.zeros(13)
-        lambda_ = 0.01 * 6 
-        alpha=0.01 
-        beta=0.15
-        w_mean[0] = lambda_ / (lambda_ + 6) + (1 - alpha*alpha + beta)
-        w_mean[1:12] = 1/ (2*(lambda_ + 6))
-
+        Wc = np.zeros(13)
+        alpha = 0.01
+        lambda_ = alpha**2 * 6  
+        beta = 2
+        w_mean[0] = lambda_ / (6 + lambda_)
+        w_mean[1:13] = 1 / (2 * (6 + lambda_))
+        Wc[0] = w_mean[0] + (1 - alpha**2 + beta)
+        Wc[1:13] = w_mean[1:13]      
         covariance_of_process_model = np.diag([sigma_x,sigma_y,sigma_z,180/((np.sqrt(variances_fixed_points[1]/sigma_z)+(np.sqrt(variances_fixed_points[2]/sigma_y)))),180/((np.sqrt(variances_fixed_points[0]/sigma_z)+(np.sqrt(variances_fixed_points[2]/sigma_x)))),180/((np.sqrt(variances_fixed_points[0]/sigma_y)+(np.sqrt(variances_fixed_points[1]/sigma_x))))]) 
+        print(covariance_of_process_model)
+        U = U_init
+        treshold = 0.01
+        change = 10
+        
+        
+        while(change > treshold):
+            
+            #previously_selected_points = np.zeros((0, 1))
+            estimated_points = np.zeros((0, 1))
+            ordered_Y = np.zeros((0, 1))
 
 
-        sigma_points_cumulative = np.empty((13,0))
-
-        previously_selected_points = np.zeros((0, 1))
-
-        estimated_points = np.zeros((0, 1))
-
-        for i in range(X.shape[1]):
-                
-            sigma_y_points = np.empty((0,3))
+            # PREDICTION
+                        
             x_k_prior = x_k_posterior
+
             P_k_prior = P_k_posterior + covariance_of_process_model
-            sigma_x = compute_sigma_points(x_k_posterior, P_k_posterior)
-            
-            
-            for k in range(sigma_x.shape[1]):
 
-                R_k = compute_R(sigma_x[3][k], sigma_x[4][k], sigma_x[5][k])
-                #print(sigma_x[3][k])
-                y_sigma = R_k @ X[:,i] + sigma_x[0:3,k]
-                sigma_y_points = np.vstack((sigma_y_points,y_sigma))
+            sigma_x_points = compute_sigma_points(x_k_prior, P_k_prior)
 
-            sigma_points_cumulative = np.hstack((sigma_points_cumulative,sigma_y_points))
-            sigma_points_cumulative_transpose = sigma_points_cumulative.T
-            
-            R_k = compute_R(x_k_prior[3],x_k_prior[4],x_k_prior[5])
-            y_k = R_k @ moving_points[:,i] + x_k_prior[0:3]
-            
-            Pyy = 0
-            Pxy = 0
-            estimated_points = np.vstack((estimated_points,y_k.reshape(-1,1)))
-            previously_selected_points = np.vstack((previously_selected_points,fixed_points[:,i].reshape(-1,1)))
-            
+        
+            R = compute_R(x_k_prior[3], x_k_prior[4], x_k_prior[5])
 
-            for k in range(13):
+            
+            for i in range(U.shape[1]):
+
+                #previously_selected_points = np.vstack((previously_selected_points,U[:,i].reshape(-1,1)))
+
+                y_k_prior = R @ U[:,i].reshape(-1, 1) + x_k_prior[:3].reshape(-1, 1)
+                estimated_points = np.vstack([estimated_points,y_k_prior])
+            
+            #Compute the propagated sigma points sigma_y
+            
+            sigma_y_points = np.zeros((3*U.shape[1],13))
+
+
+            for i in range(13):
                 
-                Pyy = Pyy + w_mean[k]*(sigma_points_cumulative_transpose[:,k].reshape(-1,1) - estimated_points) @ (sigma_points_cumulative_transpose[:,k].reshape(-1,1) - estimated_points).T
-                Pxy = Pxy + w_mean[k]*(sigma_x[:,k].reshape(-1,1) - x_k_posterior.reshape(-1,1)) @ (sigma_points_cumulative_transpose[:,k].reshape(-1,1) - estimated_points).T
+                state_k = sigma_x_points[:,i]
+                R_sigma = compute_R(state_k[3], state_k[4], state_k[5])
+                t_sigma = np.array([state_k[0],state_k[1],state_k[2]]).reshape(-1,1)
+                state_y = R_sigma @ U + t_sigma
+                sigma_y_points[:, i] = state_y.reshape((3*U.shape[1],),order='F')
             
-            K_k = Pxy @ np.linalg.inv(Pyy)
+            # Compute Pxy Py
+            Pxy = 0
+            Py = 0
             
-            x_k_posterior = x_k_prior.reshape(-1,1) + K_k @ (previously_selected_points - estimated_points)
-            x_k_posterior = x_k_posterior.reshape(6)
+            y_mean = 0
+            
+            for i in range(13):
+                y_mean = y_mean + w_mean[i] * sigma_y_points[:, i]
+                
 
-            P_k_posterior = P_k_prior - K_k @ Pyy @ K_k.T
-       
-        R = compute_R(x_k_posterior[3], x_k_posterior[4], x_k_posterior[5])
-        t = np.array([x_k_posterior[0],x_k_posterior[1],x_k_posterior[2]]).reshape(-1,1)
+            
+            for i in range(13): 
+                Py = Py + Wc[i] * (sigma_y_points[:, i] - y_mean.reshape(-1,1)) @ (sigma_y_points[:, i] - y_mean.reshape(-1,1)).T
+                Pxy = Pxy + Wc[i] * (sigma_x_points[:,i].reshape(-1,1) - x_k_prior.reshape(-1,1)) @ (sigma_y_points[:, i].reshape(-1,1) - y_mean.reshape(-1,1)).T
+            #Pxy = (sigma_x.reshape(-1,1) - x_k_prior.reshape(-1,1)) @ (rearranged_points - estimated_points).T
+            #Pyy = (rearranged_points - estimated_points) @ (rearranged_points - estimated_points).T
+        
+            
+            K_k = Pxy @ np.linalg.inv(Py)
+            #print(K_k)
+            y = Y
+            y_estimated = estimated_points.reshape((3,int(estimated_points.shape[0]/3)),order='F')
+            distances = np.linalg.norm(y[:, :, np.newaxis] - y_estimated[:, np.newaxis, :], axis=0)
+            row_indices, col_indices = linear_sum_assignment(distances)
+            col_indices = np.flip(col_indices)
+            rearranged_points = y[:, col_indices]
+            rearranged_points = rearranged_points.reshape(-1,1)
+
+
+            
+            
+            #CORRECTION
+            x_k_posterior = x_k_prior.reshape(-1,1) + K_k @ (rearranged_points - y_mean.reshape(-1,1))
+            x_k_posterior = x_k_posterior.reshape(6)
+            P_k_posterior = P_k_prior - K_k @ Py @ K_k.T
+            #print(P_k_posterior)
+
+            R = compute_R(x_k_posterior[3], x_k_posterior[4], x_k_posterior[5])
+            t = np.array([x_k_posterior[0],x_k_posterior[1],x_k_posterior[2]]).reshape(-1,1)
+
+            U = R @ U + t
+            change = np.linalg.norm(Y-U)
+
+
         T = np.identity(4)
 
         T[0:3,0:3] = R
@@ -410,8 +450,10 @@ def UKF(moving_points, fixed_points):
         T[1,3] = x_k_posterior[1]
         T[2,3] = x_k_posterior[2]
 
-       
+
         return T, R, t
+
+
 
 U = points = np.random.uniform(-0.250, 0.250, size=(3, 30))
 
@@ -433,17 +475,15 @@ noise = np.random.multivariate_normal(mean=np.zeros(3), cov=covariance, size=U.s
 
 U_noisy = U + noise
 
-
-T, R, t = UKF(U_noisy, E)
-
-S = R @ U_noisy + t.reshape(-1,1)
+min_err = 1000
 
 
-print(match_T)
-# Calculate the squared Euclidean distance between corresponding points
-squared_distance = np.sum((C - Y)**2, axis=0)
+T, R, t= UKF(U_noisy,E)
 
-# Calculate the Root Mean Squared Error (RMSE)
-rmse = np.sqrt(np.mean(squared_distance))
+res = compute_fre(E,U_noisy, R, t)
 
-print(rmse)
+print(res)
+
+    
+
+
