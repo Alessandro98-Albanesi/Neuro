@@ -1,8 +1,11 @@
 import itertools
 import numpy as np
 import open3d as o3d
+import matplotlib.pyplot as plt
 from scipy.optimize import linear_sum_assignment
 from filterpy.kalman import MerweScaledSigmaPoints as SigmaPoints
+from scipy.spatial.distance import cdist
+from sklearn.decomposition import PCA
 
 
 def Kabsch_Algorithm (A,B):
@@ -169,109 +172,9 @@ for iter in range(len(permuted_list)):
 #print(result)
 #print(match_R)
 #print(min_err)
-
+print(match)
 C = match_R @ match + match_t
-
-
-
-
-
-#def UKF_registration(measured_points,fixed_points):
-
-'''
-    x_k_posterior = np.array([0,0,0,0,0,0]).reshape((6, 1))
-    P_k_posterior = np.identity(6)
-
-    sigma_x = 0.01  # Example value, adjust as needed
-    sigma_y = 0.01  # Example value, adjust as needed
-    sigma_z = 0.01  # Example value, adjust as needed
-
-    # Create covariance matrix
-    covariance_matrix_noise = np.diag([sigma_x, sigma_y, sigma_z])
-    
-    variances_fixed_points = np.var(fixed_points, axis=1)
-    
-    
-    covariance_of_process_model = np.diag([sigma_x,sigma_y,sigma_z,180/((np.sqrt(variances_fixed_points[1]/sigma_z)+(np.sqrt(variances_fixed_points[2]/sigma_y)))),180/((np.sqrt(variances_fixed_points[0]/sigma_z)+(np.sqrt(variances_fixed_points[2]/sigma_x)))),180/((np.sqrt(variances_fixed_points[0]/sigma_y)+(np.sqrt(variances_fixed_points[1]/sigma_x))))]) 
-    
-    previously_selected_points = np.zeros((0, 1))
-   
-    estimated_points = np.zeros((0, 1))
-    
-    x_i = covariance_of_process_model
-
-    for i in range(measured_points.shape[1]):
-
-        x_k_prior = x_k_posterior
-        #print("x_k_prior",x_k_prior)
-        P_k_prior = P_k_posterior + covariance_of_process_model
-        #print(P_k_prior)
-        #sigma_point_k = compute_sigma_points(x_k_prior, P_k_prior, alpha=1e-3, beta=2.0, kappa=0.0).reshape(6,1)
-
-        previously_selected_points =  np.vstack([previously_selected_points, fixed_points[:,i].reshape(3, 1)])
-
-        theta_x = x_k_prior[3,0]
-        theta_y = x_k_prior[4,0]
-        theta_z = x_k_prior[5,0]
-        
-        Rx = np.array([
-        [1, 0, 0],
-        [0, np.cos(theta_x), -np.sin(theta_x)],
-        [0, np.sin(theta_x), np.cos(theta_x)]
-        ])
-
-        Ry = np.array([
-        [np.cos(theta_y), 0, np.sin(theta_y)],
-        [0, 1, 0],
-        [-np.sin(theta_y), 0, np.cos(theta_y)]
-        ])
-
-        Rz = np.array([
-        [np.cos(theta_z), -np.sin(theta_z), 0],
-        [np.sin(theta_z), np.cos(theta_z), 0],
-        [0, 0, 1]
-        ])
-
-        R = np.dot(Rz, np.dot(Ry, Rx))
-        
-        y_k_prior = R @ measured_points[:,i].reshape(-1, 1) + x_k_prior[:3,0].reshape(-1, 1)
-        
-        estimated_points = np.vstack([estimated_points,y_k_prior])
-        
-        #print(estimated_points)
-        #print(previously_selected_points)
-
-        result_array_y = previously_selected_points - estimated_points 
-        print("res",result_array_y.shape)
-        reuslt_array_x =  (x_k_prior + 0.01) - x_k_prior
-
-        Pxy = np.outer(reuslt_array_x, result_array_y) 
-        Pyy = np.outer(result_array_y,result_array_y)
-        
-        print(Pxy)
-        print(Pyy.shape)
-
-        K_k = np.dot(Pxy, np.linalg.pinv(Pyy))
-       
-        x_k_posterior = x_k_prior + K_k @ result_array_y
-        
-        P_k_posterior = P_k_prior - K_k @ Pyy @ K_k.T
-    
-    return x_k_posterior
-'''
-
-
-
-
-
-
-
-
-
-
-
-
-
+print(C)
 
 
 
@@ -297,11 +200,35 @@ def compute_R(theta_x, theta_y, theta_z):
         [0, 0, 1]
         ])
 
-        R = np.dot(Rz, np.dot(Ry, Rx))
+        R = np.dot(Rx, np.dot(Ry, Rz))
 
         return R
 
-def compute_sigma_points(x, P, alpha=0.001, beta=2.0, kappa=0.0):
+
+
+U = np.random.uniform(-0.250, 0.250, size=(3, 100))
+
+rotation_angles = np.random.uniform(-90, 90, size=(3,))
+
+
+translation = np.random.uniform(-0.090, 0.090, size=(3,))
+
+
+R_gener = compute_R(rotation_angles[0], rotation_angles[1], rotation_angles[2])
+t_gener = translation
+
+
+E = R_gener @ U + t_gener.reshape(-1,1)
+
+covariance = 0.001 * np.eye(3)  # Identity matrix representing the covariance matrix
+noise = np.random.multivariate_normal(mean=np.zeros(3), cov=covariance, size=U.shape[1]).T
+
+
+U_noisy = U + noise
+
+
+
+def compute_sigma_points(x, P, alpha, beta, lambda_):
     """
     Compute sigma points for a 6x1 vector.
 
@@ -313,14 +240,16 @@ def compute_sigma_points(x, P, alpha=0.001, beta=2.0, kappa=0.0):
     Returns:
     - sigma_points: Array of sigma points, each column represents a sigma point
     """
-    n = len(x)  # Dimension of the state vector
-    lambda_ = alpha**2 * 6 
+    n = len(x)  # Dimension of the state vector 
 
     # Compute the sigma points
     sigma_points = np.zeros((n, 2 * n + 1))
-    sigma_point = 0
     # Compute sigma points as columns of matrix X
-    sqrt_P = np.linalg.cholesky(P)
+    #sqrt_P = np.linalg.cholesky(P)
+    V,S,V_t = np.linalg.svd(P)
+    sqrt_S = np.diag(np.sqrt(S))
+    sqrt_P = V @ sqrt_S @ V_t
+
 
     sigma_points[:, 0] = x  # Mean as the first sigma point
 
@@ -332,6 +261,38 @@ def compute_sigma_points(x, P, alpha=0.001, beta=2.0, kappa=0.0):
     
     
     return sigma_points
+
+
+def find_closest_point(matrix1, matrix2):
+    
+    N = matrix2.shape[1]
+
+    # Calculate the Euclidean distance between each point in matrix2 and all points in matrix1
+    distances = cdist(matrix2.T, matrix1.T, metric='euclidean')
+
+    # Initialize arrays to store results
+    assigned_indices = set()
+    closest_points_matrix1 = np.zeros((3, N))
+    indices = []
+    # Find unique closest points
+    for i in range(N):
+        min_distance_index = np.argmin(distances[i])
+        
+        # Check if the closest point has already been assigned
+        while min_distance_index in assigned_indices:
+            # Set the distance of the already assigned point to infinity
+            distances[i, min_distance_index] = np.inf
+            min_distance_index = np.argmin(distances[i])
+        
+        # Assign the closest point to the set of assigned indices
+        assigned_indices.add(min_distance_index)
+        
+        # Update the closest points matrix
+        closest_points_matrix1[:, i] = matrix1[:, min_distance_index]
+        indices.append(min_distance_index)
+    #print(indices)
+    return closest_points_matrix1
+
 
 
 def UKF(U_init, Y):
@@ -346,26 +307,29 @@ def UKF(U_init, Y):
         variances_fixed_points = np.var(Y, axis=1)
         w_mean = np.zeros(13)
         Wc = np.zeros(13)
-        alpha = 0.01
-        lambda_ = alpha**2 * 6  
+        alpha = 1
+        k = 3
+        lambda_ = alpha**2 * (6 + k) - 6
         beta = 2
         w_mean[0] = lambda_ / (6 + lambda_)
         w_mean[1:13] = 1 / (2 * (6 + lambda_))
         Wc[0] = w_mean[0] + (1 - alpha**2 + beta)
-        Wc[1:13] = w_mean[1:13]      
+        Wc[1:13] = w_mean[1:13]    
         covariance_of_process_model = np.diag([sigma_x,sigma_y,sigma_z,180/((np.sqrt(variances_fixed_points[1]/sigma_z)+(np.sqrt(variances_fixed_points[2]/sigma_y)))),180/((np.sqrt(variances_fixed_points[0]/sigma_z)+(np.sqrt(variances_fixed_points[2]/sigma_x)))),180/((np.sqrt(variances_fixed_points[0]/sigma_y)+(np.sqrt(variances_fixed_points[1]/sigma_x))))]) 
-        print(covariance_of_process_model)
         U = U_init
-        treshold = 0.01
-        change = 10
+        treshold = 0.001
+        fre = 1
+
+        print("lambda", lambda_)
+        print("w_mean",w_mean)
+        print("Wc",Wc)
+        print(np.sum(w_mean))
+
         
-        
-        while(change > treshold):
-            
+
+        while(fre > treshold):
             #previously_selected_points = np.zeros((0, 1))
             estimated_points = np.zeros((0, 1))
-            ordered_Y = np.zeros((0, 1))
-
 
             # PREDICTION
                         
@@ -373,12 +337,14 @@ def UKF(U_init, Y):
 
             P_k_prior = P_k_posterior + covariance_of_process_model
 
-            sigma_x_points = compute_sigma_points(x_k_prior, P_k_prior)
+            sigma_x_points = compute_sigma_points(x_k_prior, P_k_prior, alpha, beta, lambda_)
 
         
             R = compute_R(x_k_prior[3], x_k_prior[4], x_k_prior[5])
-
             
+            y_real = R @ U + x_k_prior[:3].reshape(-1, 1)
+            y_real = y_real.reshape((3*U.shape[1],),order='F')
+
             for i in range(U.shape[1]):
 
                 #previously_selected_points = np.vstack((previously_selected_points,U[:,i].reshape(-1,1)))
@@ -407,31 +373,26 @@ def UKF(U_init, Y):
             
             for i in range(13):
                 y_mean = y_mean + w_mean[i] * sigma_y_points[:, i]
-                
-
+            
             
             for i in range(13): 
                 Py = Py + Wc[i] * (sigma_y_points[:, i] - y_mean.reshape(-1,1)) @ (sigma_y_points[:, i] - y_mean.reshape(-1,1)).T
                 Pxy = Pxy + Wc[i] * (sigma_x_points[:,i].reshape(-1,1) - x_k_prior.reshape(-1,1)) @ (sigma_y_points[:, i].reshape(-1,1) - y_mean.reshape(-1,1)).T
-            #Pxy = (sigma_x.reshape(-1,1) - x_k_prior.reshape(-1,1)) @ (rearranged_points - estimated_points).T
-            #Pyy = (rearranged_points - estimated_points) @ (rearranged_points - estimated_points).T
+
+               
+            K_k = Pxy @ np.linalg.pinv(Py)
         
+            #find the closest point in Y to the estimated y
+
+            y_estimated = R @ U + x_k_prior[:3].reshape(-1, 1)
+            closest_points_matrix1 = find_closest_point(Y,y_estimated)
+            closest_points_matrix1 = closest_points_matrix1.reshape((3*closest_points_matrix1.shape[1],1),order='F')
+            y_estimated = y_estimated.reshape((3*y_estimated.shape[1],1),order='F')
             
-            K_k = Pxy @ np.linalg.inv(Py)
-            #print(K_k)
-            y = Y
-            y_estimated = estimated_points.reshape((3,int(estimated_points.shape[0]/3)),order='F')
-            distances = np.linalg.norm(y[:, :, np.newaxis] - y_estimated[:, np.newaxis, :], axis=0)
-            row_indices, col_indices = linear_sum_assignment(distances)
-            col_indices = np.flip(col_indices)
-            rearranged_points = y[:, col_indices]
-            rearranged_points = rearranged_points.reshape(-1,1)
-
-
             
             
             #CORRECTION
-            x_k_posterior = x_k_prior.reshape(-1,1) + K_k @ (rearranged_points - y_mean.reshape(-1,1))
+            x_k_posterior = x_k_prior.reshape(-1,1) + K_k @ (closest_points_matrix1 - y_estimated)
             x_k_posterior = x_k_posterior.reshape(6)
             P_k_posterior = P_k_prior - K_k @ Py @ K_k.T
             #print(P_k_posterior)
@@ -440,7 +401,10 @@ def UKF(U_init, Y):
             t = np.array([x_k_posterior[0],x_k_posterior[1],x_k_posterior[2]]).reshape(-1,1)
 
             U = R @ U + t
-            change = np.linalg.norm(Y-U)
+            
+            fre = compute_fre(Y,U,R,t)
+            print(fre)
+        
 
 
         T = np.identity(4)
@@ -453,37 +417,62 @@ def UKF(U_init, Y):
 
         return T, R, t
 
+#T, R, t = UKF(U_init,E)
+#fre1 = compute_fre(E,U_init,R,t)
 
+#print(fre1)
+#print(fre2)
 
-U = points = np.random.uniform(-0.250, 0.250, size=(3, 30))
+def PCA_registration(points_U,points_Y):
+    
+    N_U = points_U.shape[1]
+    N_Y = points_Y.shape[1]
+    
+    # calculate centroids
+    U_centroid = np.reshape(1/N_U * (np.sum(points_U, axis=1)), (3,1))
+    Y_centroid = np.reshape(1/N_Y * (np.sum(points_Y, axis=1)), (3,1))
 
-rotation_angles = np.random.uniform(-90, 90, size=(3,))
+    cov_U = np.cov(points_U)
+    cov_Y = np.cov(points_Y)
 
-
-translation = np.random.uniform(-0.090, 0.090, size=(3,))
-
-
-R_gener = compute_R(rotation_angles[0], rotation_angles[1], rotation_angles[2])
-t_gener = translation
-
-
-E = R_gener @ U + t_gener.reshape(-1,1)
-
-covariance = 0.001 * np.eye(3)  # Identity matrix representing the covariance matrix
-noise = np.random.multivariate_normal(mean=np.zeros(3), cov=covariance, size=U.shape[1]).T
-
-
-U_noisy = U + noise
-
-min_err = 1000
-
-
-T, R, t= UKF(U_noisy,E)
-
-res = compute_fre(E,U_noisy, R, t)
-
-print(res)
+    U_pca_points_U,S_pca_points_U,V_T_pca_points_U = np.linalg.svd(cov_U)
+    U_pca_points_Y,S_pca_points_Y,V_T_pca_points_Y = np.linalg.svd(cov_Y)
+    R_pca = V_T_pca_points_Y.T @ V_T_pca_points_U
 
     
+    #print("det",np.linalg.det(R_pca))
+    t_pca = Y_centroid - R_pca @ U_centroid
+
+    return R_pca,t_pca
+
+
+
+
+
+R_pca,t_pca = PCA_registration(U_noisy,E)
+res1 = compute_fre(E, U_noisy, R_pca, t_pca)
+
+R_arun,t_arun,T_arun = arun(U_noisy,E)
+res2 = compute_fre(E,U_noisy, R_arun, t_arun)
+
+U_init = R_arun @ U_noisy + t_arun
+
+# Plot the point cloud
+fig = plt.figure(figsize=(8, 8))
+ax = fig.add_subplot(111, projection='3d')
+ax.scatter(E[0], E[1], E[2], c='blue', marker='o', label='Point Cloud')
+ax.scatter(U_init[0], U_init[1], U_init[2], c='red', marker='o', label='Point Cloud')
+plt.show()
+
+
+
+print(res1)
+print(res2)
+
+#U_init = R @ U_noisy + t
+
+T, R, t = UKF(U_init,E)
+
+
 
 
