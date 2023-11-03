@@ -6,6 +6,8 @@ from scipy.optimize import linear_sum_assignment
 from filterpy.kalman import MerweScaledSigmaPoints as SigmaPoints
 from scipy.spatial.distance import cdist
 from sklearn.decomposition import PCA
+import pyvista as pv
+import copy
 
 
 def Kabsch_Algorithm (A,B):
@@ -174,7 +176,10 @@ for iter in range(len(permuted_list)):
 #print(min_err)
 print(match)
 C = match_R @ match + match_t
-print(C)
+squared_diff = np.square(C - Y)
+mean_squared_error = np.mean(squared_diff)
+rmse_error = np.sqrt(mean_squared_error)
+print("RMSE_Arun",rmse_error)
 
 
 
@@ -206,7 +211,7 @@ def compute_R(theta_x, theta_y, theta_z):
 
 
 
-U = np.random.uniform(-0.250, 0.250, size=(3, 100))
+U = np.random.uniform(-0.250, 0.250, size=(3, 4))
 
 rotation_angles = np.random.uniform(-90, 90, size=(3,))
 
@@ -221,10 +226,10 @@ t_gener = translation
 E = R_gener @ U + t_gener.reshape(-1,1)
 
 covariance = 0.001 * np.eye(3)  # Identity matrix representing the covariance matrix
-noise = np.random.multivariate_normal(mean=np.zeros(3), cov=covariance, size=U.shape[1]).T
+noise = np.random.normal(0, 0.01, E.shape)
 
 
-U_noisy = U + noise
+E = E + noise
 
 
 
@@ -319,11 +324,13 @@ def UKF(U_init, Y):
         U = U_init
         treshold = 0.001
         fre = 1
-
+        
+        '''
         print("lambda", lambda_)
         print("w_mean",w_mean)
         print("Wc",Wc)
         print(np.sum(w_mean))
+        '''
 
         
 
@@ -403,7 +410,7 @@ def UKF(U_init, Y):
             U = R @ U + t
             
             fre = compute_fre(Y,U,R,t)
-            print(fre)
+            #print(fre)
         
 
 
@@ -436,42 +443,243 @@ def PCA_registration(points_U,points_Y):
     cov_Y = np.cov(points_Y)
 
     U_pca_points_U,S_pca_points_U,V_T_pca_points_U = np.linalg.svd(cov_U)
+    W_0 = U_pca_points_U
+
+    W_1 = np.zeros((3,3))
+    W_1[:,0] = - W_0[:,0]
+    W_1[:,1] = - W_0[:,1]
+    W_1[:,2] =   W_0[:,2]
+
+    W_2 = np.zeros((3,3))
+    W_2[:,0] =   W_0[:,0]
+    W_2[:,1] = - W_0[:,1]
+    W_2[:,2] = - W_0[:,2]
+
+    W_3 = np.zeros((3,3))
+    W_3[:,0] = - W_0[:,0]
+    W_3[:,1] =   W_0[:,1]
+    W_3[:,2] = - W_0[:,2]
+
+
     U_pca_points_Y,S_pca_points_Y,V_T_pca_points_Y = np.linalg.svd(cov_Y)
-    R_pca = V_T_pca_points_Y.T @ V_T_pca_points_U
+    V = U_pca_points_Y
 
+    R_0 = V @ W_0.T
+    print(np.linalg.det(R_0))
+    R_1 = V @ W_1.T
+    print(np.linalg.det(R_1))
+    R_2 = V @ W_2.T
+    print(np.linalg.det(R_2))
+    R_3 = V @ W_3.T
+    print(np.linalg.det(R_3))
+
+    t_0 = Y_centroid - R_0 @ U_centroid
+    t_1 = Y_centroid - R_1 @ U_centroid
+    t_2 = Y_centroid - R_2 @ U_centroid
+    t_3 = Y_centroid - R_3 @ U_centroid
+
+    R_k = [R_0,R_1,R_2,R_3]
+    t_k = [t_0,t_1,t_2,t_3]
     
-    #print("det",np.linalg.det(R_pca))
-    t_pca = Y_centroid - R_pca @ U_centroid
+    minimun_error = 100
 
-    return R_pca,t_pca
+    for k in range(4):
+        
+        U_k = R_k[k] @ points_U + t_k[k]
+        
+        C_k = []
+
+        for i in range(U_k.shape[1]):
+
+            distances = np.linalg.norm(points_Y - U_k[:,i].reshape(-1,1), axis=0)
+            closest_index = np.argmin(distances)
+            closest_point = points_Y[:,closest_index]
+            C_k.append(closest_point)
+        
+        C_k = np.array(C_k).T
+
+        squared_diff = np.square(C_k - U_k)
+        mean_squared_error = np.mean(squared_diff)
+        rmse_error = np.sqrt(mean_squared_error)
+        print(rmse_error)
+        
+
+        if(rmse_error < minimun_error):
+            minimun_error = rmse_error
+            result_index = k
+
+    print("RMSE_pca:", minimun_error)
+    T_k = np.identity(4)
+    T_k[0:3,0:3] = R_k[result_index]
+    
+    T_k[0][-1] = t_k[result_index][0]
+    T_k[1][-1] = t_k[result_index][1]
+    T_k[2][-1] = t_k[result_index][2]
+
+    return R_k[result_index], t_k[result_index], T_k
+
+
+
+#import the first mesh
+mesh = pv.read("C:/Users/Alessandro/Desktop/Neuro/face_3t_mWtextr.obj")
+mesh = mesh.decimate(0.1)
+vertices = np.array(mesh.points)  # Transpose for a 3xN matrix
+reduction_factor = 0.01  # Adjust as needed
+downsampled_points = vertices[np.random.choice(vertices.shape[0], int(reduction_factor * vertices.shape[0]), replace=False)]
+downsampled_points_1 = downsampled_points.T
+
+#import the second mesh
+mesh = pv.read("C:/Users/Alessandro/Desktop/Neuro/face_3t_mWtextr.obj")
+mesh = mesh.decimate(0.1)
+vertices = np.array(mesh.points)  # Transpose for a 3xN matrix
+reduction_factor = 0.01  # Adjust as needed
+downsampled_points = vertices[np.random.choice(vertices.shape[0], int(reduction_factor * vertices.shape[0]), replace=False)]
+downsampled_points_2 = downsampled_points.T
+
+
+R_pca,t_pca,T_pca = PCA_registration(downsampled_points_1,downsampled_points_2)
+registered_pca = R_pca @ downsampled_points_1 + t_pca
+
+cloud_registered = pv.PolyData(registered_pca.T)
+cloud_target = pv.PolyData(downsampled_points_2.T)
+
+
+# Create a plotter
+plotter = pv.Plotter()
+
+# Add each point cloud to the plot
+#plotter.add_mesh(cloud1, color="red", point_size=1, opacity=0.8, render_points_as_spheres=True)
+plotter.add_mesh(cloud_registered, color="green", point_size=2, opacity=1, render_points_as_spheres=True)
+plotter.add_mesh(cloud_target, color="green", point_size=2, opacity=1, render_points_as_spheres=True)
+
+plotter.show()
+
+
+
+tranformed_vertices = R_gener @ downsampled_points + t_gener.reshape(-1,1)
+#noise = np.random.normal(0, 0.008, tranformed_vertices.shape)
+#tranformed_vertices = tranformed_vertices + noise
+
+noise = np.random.normal(0, 0.001, downsampled_points.shape)
+downsampled_points = downsampled_points + noise
+
+
+permutation = np.random.permutation(downsampled_points.shape[1])
+downsampled_points = downsampled_points[:, permutation]
+
+R_pca,t_pca,T_pca = PCA_registration(downsampled_points,tranformed_vertices)
+registered_pca = R_pca @ downsampled_points + t_pca
+
+
+R_arun,t_arun,T_arun = arun(downsampled_points,tranformed_vertices)
+registered_arun = R_arun @ downsampled_points + t_arun
+
+#T, R, t = UKF(downsampled_points,tranformed_vertices)
+
+source_cloud = o3d.geometry.PointCloud()
+source_cloud.points = o3d.utility.Vector3dVector(downsampled_points.T)  # Transpose for correct shape
+
+target_cloud = o3d.geometry.PointCloud()
+target_cloud.points = o3d.utility.Vector3dVector(tranformed_vertices.T)
+
+
+def preprocess_point_cloud(pcd, voxel_size):
+    print(":: Downsample with a voxel size %.3f." % voxel_size)
+    pcd_down = pcd.voxel_down_sample(voxel_size)
+
+    radius_normal = voxel_size * 2
+    print(":: Estimate normal with search radius %.3f." % radius_normal)
+    pcd_down.estimate_normals(
+        o3d.geometry.KDTreeSearchParamHybrid(radius=radius_normal, max_nn=30))
+
+    radius_feature = voxel_size * 5
+    print(":: Compute FPFH feature with search radius %.3f." % radius_feature)
+    pcd_fpfh = o3d.pipelines.registration.compute_fpfh_feature(
+        pcd_down,
+        o3d.geometry.KDTreeSearchParamHybrid(radius=radius_feature, max_nn=100))
+    return pcd_down, pcd_fpfh
+
+
+
+voxel_size = 0.1
+source_down, source_fpfh = preprocess_point_cloud(source_cloud, voxel_size)
+target_down, target_fpfh = preprocess_point_cloud(target_cloud, voxel_size)
+
+
+def execute_global_registration(source_down, target_down, source_fpfh,
+                                target_fpfh, voxel_size):
+    distance_threshold = voxel_size * 1.5
+    print(":: RANSAC registration on downsampled point clouds.")
+    print("   Since the downsampling voxel size is %.3f," % voxel_size)
+    print("   we use a liberal distance threshold %.3f." % distance_threshold)
+    result = o3d.pipelines.registration.registration_ransac_based_on_feature_matching(
+        source_down, target_down, source_fpfh, target_fpfh, True,
+        distance_threshold,
+        o3d.pipelines.registration.TransformationEstimationPointToPoint(False),
+        3, [
+            o3d.pipelines.registration.CorrespondenceCheckerBasedOnEdgeLength(
+                0.9),
+            o3d.pipelines.registration.CorrespondenceCheckerBasedOnDistance(
+                distance_threshold)
+        ], o3d.pipelines.registration.RANSACConvergenceCriteria(100000, 0.999))
+    return result
+
+result_ransac = execute_global_registration(source_down, target_down,
+                                            source_fpfh, target_fpfh,
+                                            voxel_size)
+#print(result_ransac.transformation)
+
+
+result = o3d.pipelines.registration.registration_icp(
+    source_cloud, target_cloud,  # Source and target point clouds
+    10,  # Maximum correspondence distance (increase if points are far apart)
+    result_ransac.transformation,  # Initial transformation guess
+    o3d.pipelines.registration.TransformationEstimationPointToPoint(),  # Point-to-point ICP
+    o3d.pipelines.registration.ICPConvergenceCriteria(max_iteration=1000)  # Max iterations
+)
+
+refined_transform = result.transformation
+
+icp_regist = source_cloud.transform(refined_transform)
+
+# Compute the RMSE
+evaluation = o3d.pipelines.registration.evaluate_registration(
+    icp_regist, target_cloud,
+    max_correspondence_distance=0.1  # Adjust as needed
+)
+
+rmse_icp = evaluation.inlier_rmse
+print("RMSE_icp:", rmse_icp)
+
+
+icp_regist = np.asarray(icp_regist.points).T
+
+#cloud1 = pv.PolyData(downsampled_points.T)
+cloud2 = pv.PolyData(tranformed_vertices.T)
+cloud3 = pv.PolyData(registered_pca.T)
+cloud4 = pv.PolyData(registered_arun.T)
+cloud5 = pv.PolyData(icp_regist.T)
+
+
+# Create a plotter
+plotter = pv.Plotter()
+
+# Add each point cloud to the plot
+#plotter.add_mesh(cloud1, color="red", point_size=1, opacity=0.8, render_points_as_spheres=True)
+plotter.add_mesh(cloud2, color="green", point_size=2, opacity=1, render_points_as_spheres=True)
+plotter.add_mesh(cloud3, color="blue", point_size=2, opacity=1, render_points_as_spheres=True)
+#plotter.add_mesh(cloud4, color="yellow", point_size=1, opacity=0.8, render_points_as_spheres=True)
+plotter.add_mesh(cloud5, color="red", point_size=2, opacity=1, render_points_as_spheres=True)
+
+plotter.show()
+
+
+R_pca,t_pca,T_pca = PCA_registration(U,E)
+#registered_pca = R_pca @ downsampled_points + t_pca
 
 
 
 
-
-R_pca,t_pca = PCA_registration(U_noisy,E)
-res1 = compute_fre(E, U_noisy, R_pca, t_pca)
-
-R_arun,t_arun,T_arun = arun(U_noisy,E)
-res2 = compute_fre(E,U_noisy, R_arun, t_arun)
-
-U_init = R_arun @ U_noisy + t_arun
-
-# Plot the point cloud
-fig = plt.figure(figsize=(8, 8))
-ax = fig.add_subplot(111, projection='3d')
-ax.scatter(E[0], E[1], E[2], c='blue', marker='o', label='Point Cloud')
-ax.scatter(U_init[0], U_init[1], U_init[2], c='red', marker='o', label='Point Cloud')
-plt.show()
-
-
-
-print(res1)
-print(res2)
-
-#U_init = R @ U_noisy + t
-
-T, R, t = UKF(U_init,E)
 
 
 
