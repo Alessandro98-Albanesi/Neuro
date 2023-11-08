@@ -10,6 +10,7 @@ import pyvista as pv
 import copy
 
 
+
 def Kabsch_Algorithm (A,B):
 
     
@@ -226,7 +227,7 @@ t_gener = translation
 E = R_gener @ U + t_gener.reshape(-1,1)
 
 covariance = 0.001 * np.eye(3)  # Identity matrix representing the covariance matrix
-noise = np.random.normal(0, 0.01, E.shape)
+noise = np.random.normal(0, 0.001, E.shape)
 
 
 E = E + noise
@@ -518,15 +519,16 @@ def PCA_registration(points_U,points_Y):
 
     return R_k[result_index], t_k[result_index], T_k
 
-
+'''
 
 #import the first mesh
 mesh = pv.read("C:/Users/Alessandro/Desktop/Neuro/face_3t_mWtextr.obj")
 mesh = mesh.decimate(0.1)
 vertices = np.array(mesh.points)  # Transpose for a 3xN matrix
-reduction_factor = 0.01  # Adjust as needed
+reduction_factor = 0.1  # Adjust as needed
 downsampled_points = vertices[np.random.choice(vertices.shape[0], int(reduction_factor * vertices.shape[0]), replace=False)]
 downsampled_points_1 = downsampled_points.T
+
 
 #import the second mesh
 mesh = pv.read("C:/Users/Alessandro/Desktop/Neuro/face_3t_mWtextr.obj")
@@ -536,6 +538,7 @@ reduction_factor = 0.01  # Adjust as needed
 downsampled_points = vertices[np.random.choice(vertices.shape[0], int(reduction_factor * vertices.shape[0]), replace=False)]
 downsampled_points_2 = downsampled_points.T
 
+downsampled_points_2 = R_gener @ downsampled_points_1 + t_gener.reshape(-1,1)
 
 R_pca,t_pca,T_pca = PCA_registration(downsampled_points_1,downsampled_points_2)
 registered_pca = R_pca @ downsampled_points_1 + t_pca
@@ -549,19 +552,19 @@ plotter = pv.Plotter()
 
 # Add each point cloud to the plot
 #plotter.add_mesh(cloud1, color="red", point_size=1, opacity=0.8, render_points_as_spheres=True)
-plotter.add_mesh(cloud_registered, color="green", point_size=2, opacity=1, render_points_as_spheres=True)
-plotter.add_mesh(cloud_target, color="green", point_size=2, opacity=1, render_points_as_spheres=True)
+plotter.add_mesh(cloud_registered, color="green", point_size=2, opacity=0.3, render_points_as_spheres=True)
+plotter.add_mesh(cloud_target, color="red", point_size=2, opacity=1, render_points_as_spheres=True)
 
 plotter.show()
 
-
+'''
 
 tranformed_vertices = R_gener @ downsampled_points + t_gener.reshape(-1,1)
-#noise = np.random.normal(0, 0.008, tranformed_vertices.shape)
-#tranformed_vertices = tranformed_vertices + noise
+noise = np.random.normal(0, 0.002, tranformed_vertices.shape)
+tranformed_vertices = tranformed_vertices + noise
 
 noise = np.random.normal(0, 0.001, downsampled_points.shape)
-downsampled_points = downsampled_points + noise
+#downsampled_points = downsampled_points + noise
 
 
 permutation = np.random.permutation(downsampled_points.shape[1])
@@ -608,7 +611,7 @@ target_down, target_fpfh = preprocess_point_cloud(target_cloud, voxel_size)
 
 def execute_global_registration(source_down, target_down, source_fpfh,
                                 target_fpfh, voxel_size):
-    distance_threshold = voxel_size * 1.5
+    distance_threshold = voxel_size * 0.5
     print(":: RANSAC registration on downsampled point clouds.")
     print("   Since the downsampling voxel size is %.3f," % voxel_size)
     print("   we use a liberal distance threshold %.3f." % distance_threshold)
@@ -618,7 +621,7 @@ def execute_global_registration(source_down, target_down, source_fpfh,
         o3d.pipelines.registration.TransformationEstimationPointToPoint(False),
         3, [
             o3d.pipelines.registration.CorrespondenceCheckerBasedOnEdgeLength(
-                0.9),
+                0.3),
             o3d.pipelines.registration.CorrespondenceCheckerBasedOnDistance(
                 distance_threshold)
         ], o3d.pipelines.registration.RANSACConvergenceCriteria(100000, 0.999))
@@ -632,8 +635,8 @@ result_ransac = execute_global_registration(source_down, target_down,
 
 result = o3d.pipelines.registration.registration_icp(
     source_cloud, target_cloud,  # Source and target point clouds
-    10,  # Maximum correspondence distance (increase if points are far apart)
-    result_ransac.transformation,  # Initial transformation guess
+    1,  # Maximum correspondence distance (increase if points are far apart)
+    T_pca,  # Initial transformation guess
     o3d.pipelines.registration.TransformationEstimationPointToPoint(),  # Point-to-point ICP
     o3d.pipelines.registration.ICPConvergenceCriteria(max_iteration=1000)  # Max iterations
 )
@@ -676,7 +679,8 @@ plotter.show()
 
 R_pca,t_pca,T_pca = PCA_registration(U,E)
 #registered_pca = R_pca @ downsampled_points + t_pca
-
+U_init = R_pca @ U + t_pca
+T, R, t = UKF(U_init,E)
 
 
 
