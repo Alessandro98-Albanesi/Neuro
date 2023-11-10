@@ -8,6 +8,7 @@ from scipy.spatial.distance import cdist
 from sklearn.decomposition import PCA
 import pyvista as pv
 import copy
+import math
 
 
 
@@ -227,10 +228,10 @@ t_gener = translation
 E = R_gener @ U + t_gener.reshape(-1,1)
 
 covariance = 0.001 * np.eye(3)  # Identity matrix representing the covariance matrix
-noise = np.random.normal(0, 0.001, E.shape)
+noise = np.random.normal(0, 0.004, E.shape)
 
 
-E = E + noise
+U_noisy = U + noise
 
 
 
@@ -519,45 +520,117 @@ def PCA_registration(points_U,points_Y):
 
     return R_k[result_index], t_k[result_index], T_k
 
-'''
+def hiddenPointRemoval(pcd):
+    # Convert mesh to a point cloud and estimate dimensions.
+    
+    pcd = pcd.sample_points_poisson_disk(20000)
+    diameter = np.linalg.norm(np.asarray(pcd.get_max_bound()) - np.asarray(pcd.get_min_bound()))
+    #min_bound = np.array([-math.inf,-math.inf ,-math.inf])
+    #max_bound = np.array([math.inf, 0.0, -0.06])
+    #inlier_indices = np.all((min_bound <= pcd.points) & (pcd.points <= max_bound), axis=1)
+    #cropped_point_cloud = pcd.select_by_index(np.where(inlier_indices)[0].tolist())
+    print("Displaying input point cloud ...")
+    # o3d.visualization.draw([pcd], point_size=5)
+
+    # Define parameters used for hidden_point_removal.
+    originCamera = np.asarray([0, 0, 0])
+    camera = [0, diameter, 0]  # l'asse y è quello che punta verso la faccia, verificare che sia sempre così
+    radius = diameter * 100
+
+    # Get all points that are visible from given view point.
+    _, pt_map = pcd.hidden_point_removal(camera, radius)
+
+    print("Displaying point cloud after hidden point removal ...")
+    pcd_withoutHidden = copy.deepcopy(pcd)
+    pcd_withoutHidden = pcd_withoutHidden.select_by_index(pt_map)
+    pcd_withoutHidden.paint_uniform_color([0, 0.706, 0])
+    return pcd_withoutHidden
 
 #import the first mesh
-mesh = pv.read("C:/Users/Alessandro/Desktop/Neuro/face_3t_mWtextr.obj")
-mesh = mesh.decimate(0.1)
-vertices = np.array(mesh.points)  # Transpose for a 3xN matrix
-reduction_factor = 0.1  # Adjust as needed
+#mesh = pv.read("C:/Users/Alessandro/Desktop/Neuro/face_3t_mWtextr.obj")
+#mesh = mesh.decimate(0.1)
+mesh = o3d.io.read_triangle_mesh("C:/Users/Alessandro/Desktop/Neuro/face_motola_metri.obj")
+filtered_pca = hiddenPointRemoval(mesh)
+vertices = np.array(filtered_pca.points)  # Transpose for a 3xN matrix
+reduction_factor = 1  # Adjust as needed
 downsampled_points = vertices[np.random.choice(vertices.shape[0], int(reduction_factor * vertices.shape[0]), replace=False)]
 downsampled_points_1 = downsampled_points.T
-
+downsampled_points_1 = downsampled_points_1*1
+print(downsampled_points_1)
 
 #import the second mesh
-mesh = pv.read("C:/Users/Alessandro/Desktop/Neuro/face_3t_mWtextr.obj")
-mesh = mesh.decimate(0.1)
+mesh = pv.read("C:/Users/Alessandro/Desktop/Neuro/pcl_holo.ply")
+#mesh = mesh.decimate(1)
 vertices = np.array(mesh.points)  # Transpose for a 3xN matrix
-reduction_factor = 0.01  # Adjust as needed
+reduction_factor = 1  # Adjust as needed
 downsampled_points = vertices[np.random.choice(vertices.shape[0], int(reduction_factor * vertices.shape[0]), replace=False)]
 downsampled_points_2 = downsampled_points.T
-
-downsampled_points_2 = R_gener @ downsampled_points_1 + t_gener.reshape(-1,1)
+print(downsampled_points_2)
+#points_markers = np.array([[30.401019818373427, 99.34523712416595, 148.0], [21.267892448087032, 88.72368428594672, 144.0], [-8.474137969845257, 74.62251139666022, 156.0], [61.15348910659576, 61.00730867742305, 148.0], [3.148342685477857, 53.440942614801045, 152.0], [61.15348910659576, 30.826386283178625, 148.0], [-1.107926506677632, 17.833071500787707, 136.0], [2.8169381922696615, 5.84006800738452, 136.0], [43.28512929947284, 12.551242532481423, 128.0], [2.8997893155717107, 1.3821826296335704, 140.0], [-1.8928994464670907, 8.838318880735317, 136.0], [2.0917289363766796, -3.2474694542169242, 140.0], [31.860936964479635, -3.1546846126678694, 136.0], [15.020695003497178, -3.2474694542169242, 140.0], [29.506018145111256, -4.653810049343267, 136.0], [22.293238416252457, -12.506773621917914, 140.0], [14.212634624302146, -12.506773621917914, 140.0], [37.35574754300585, 0.5931289790206264, 136.0]]).T
+#points_markers = points_markers/1000
 
 R_pca,t_pca,T_pca = PCA_registration(downsampled_points_1,downsampled_points_2)
 registered_pca = R_pca @ downsampled_points_1 + t_pca
 
+# Create a plotter
+
+
 cloud_registered = pv.PolyData(registered_pca.T)
 cloud_target = pv.PolyData(downsampled_points_2.T)
-
-
-# Create a plotter
 plotter = pv.Plotter()
 
-# Add each point cloud to the plot
-#plotter.add_mesh(cloud1, color="red", point_size=1, opacity=0.8, render_points_as_spheres=True)
-plotter.add_mesh(cloud_registered, color="green", point_size=2, opacity=0.3, render_points_as_spheres=True)
-plotter.add_mesh(cloud_target, color="red", point_size=2, opacity=1, render_points_as_spheres=True)
 
+
+
+
+
+
+source_cloud = o3d.geometry.PointCloud()
+source_cloud.points = o3d.utility.Vector3dVector(downsampled_points_1.T)  # Transpose for correct shape
+
+target_cloud = o3d.geometry.PointCloud()
+target_cloud.points = o3d.utility.Vector3dVector(downsampled_points_2.T)
+target_cloud.estimate_normals(search_param=o3d.geometry.KDTreeSearchParamHybrid(radius=0.1, max_nn=30))
+
+result = o3d.pipelines.registration.registration_icp(
+    source_cloud, target_cloud,  # Source and target point clouds
+    0.001,  # Maximum correspondence distance (increase if points are far apart)
+    T_pca,  # Initial transformation guess
+    o3d.pipelines.registration.TransformationEstimationPointToPlane(),  # Point-to-point ICP
+    #o3d.pipelines.registration.ICPConvergenceCriteria(max_iteration=100000)  # Max iterations
+)
+
+refined_transform = result.transformation
+
+icp_regist = source_cloud.transform(refined_transform)
+
+# Compute the RMSE
+evaluation = o3d.pipelines.registration.evaluate_registration(
+    icp_regist, target_cloud,
+    max_correspondence_distance=0.1  # Adjust as needed
+)
+
+rmse_icp = evaluation.inlier_rmse
+print("RMSE_icp:", rmse_icp)
+
+
+icp_regist = pv.PolyData(np.asarray(icp_regist.points))
+
+
+#plotter.add_mesh(icp_regist, color="blue", point_size=1)
+plotter.add_mesh(cloud_registered, color="red", point_size=1)
+plotter.add_mesh(cloud_target, color="green", point_size=1)
 plotter.show()
 
-'''
+
+
+
+
+
+
+
+
+
 
 tranformed_vertices = R_gener @ downsampled_points + t_gener.reshape(-1,1)
 noise = np.random.normal(0, 0.002, tranformed_vertices.shape)
@@ -677,10 +750,10 @@ plotter.add_mesh(cloud5, color="red", point_size=2, opacity=1, render_points_as_
 plotter.show()
 
 
-R_pca,t_pca,T_pca = PCA_registration(U,E)
+R_pca,t_pca,T_pca = PCA_registration(U_noisy,E)
 #registered_pca = R_pca @ downsampled_points + t_pca
 U_init = R_pca @ U + t_pca
-T, R, t = UKF(U_init,E)
+#T, R, t = UKF(U_init,E)
 
 
 
