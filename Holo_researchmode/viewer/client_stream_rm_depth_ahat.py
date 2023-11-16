@@ -40,8 +40,9 @@ Obj_frame_tool = [[0,0,0], [0,-0.045,-0.05],[0,-0.09,-0.025], [0,-0.14,-0.025]]
 Obj_frame_verification = [[0,0,0,1], [0,-0.045,-0.05,1],[0,-0.09,-0.025,1], [0,-0.14,-0.025,1]]
 T_world_object = np.identity(4)
 temporal_array = []
+
 # HoloLens address
-host = "192.168.0.101"
+host = "192.168.227.235"
 
 # Create a socket server
 #server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
