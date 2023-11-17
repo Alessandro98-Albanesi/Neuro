@@ -42,7 +42,7 @@ T_world_object = np.identity(4)
 temporal_array = []
 
 # HoloLens address
-host = "192.168.227.235"
+host = "192.168.0.111"
 
 # Create a socket server
 #server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -353,7 +353,7 @@ tracker = Tracker(160, 30, 5, 100)
 while (enable):
 
     data = client.get_next_packet()
-
+    print(data.pose)
     T_world_rig = data.pose
     T_world_rig[:3,-1] = T_world_rig[-1,:3]
     T_world_rig[-1,:3] = 0

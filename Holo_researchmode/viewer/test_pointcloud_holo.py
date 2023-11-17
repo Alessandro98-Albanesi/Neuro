@@ -26,7 +26,7 @@ import copy
 
 
 # HoloLens address
-host = "192.168.227.235"
+host = "192.168.0.111"
 
 # Create a socket server
 
@@ -243,44 +243,8 @@ if __name__ == '__main__':
         return pcd_withoutHidden
 
 
-
-    # Set up the SimpleBlobDetector with default parameters
-    params = cv2.SimpleBlobDetector_Params()
-
-    # Set the threshold
-    params.minThreshold = 40
-    params.maxThreshold = 500
-
-    # Set the area filter
-    params.filterByArea = True
-    params.minArea = 0.1
-    params.maxArea = 50
-    # Set the circularity filter
-    params.filterByCircularity = True
-    params.minCircularity = 0.1
-    params.maxCircularity = 1
-
-    # Set the convexity filter
-    params.filterByConvexity = False
-    params.minConvexity = 0.1
-    params.maxConvexity = 30
-
-    # Set the inertia filter
-    params.filterByInertia = True
-    params.minInertiaRatio = 0.1
-    params.maxInertiaRatio = 1
-
-    # Set the color filter
-    params.filterByColor = True
-    params.blobColor = 255
-
-
-    # Create a detector with the parameters
-    detector = cv2.SimpleBlobDetector_create(params)
-    
-
     while True:
-        HOST = "192.168.227.213"
+        HOST = "192.168.0.112"
         PORT = 1000
 
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server_socket:
@@ -330,9 +294,6 @@ if __name__ == '__main__':
                         #depth_trunc=0.5,  # Adjust based on your specific depth values
                     )
 
-                    print(np.asarray(point_cloud.points).shape)
-                    
-                    
                     min_bound = np.array([-math.inf,-math.inf,0.1])
                     max_bound = np.array([math.inf,-0.1, 0.8])
                     
@@ -356,18 +317,24 @@ if __name__ == '__main__':
                     pyvista_cloud = pv.PolyData(np.asarray(clustered_cloud.points))
                     pyvista_cloud.plot(point_size=1, color="red")
                     
+
                     T_depth_to_world = hl2ss_3dcv.camera_to_rignode(calibration.extrinsics) @ hl2ss_3dcv.reference_to_world(data.pose)
                     points_patient_depth = np.asarray(clustered_cloud.points)
                     points_patient_world = hl2ss_3dcv.transform(points_patient_depth, T_depth_to_world)
+                    pyvista_transformed = pv.PolyData(points_patient_world)
+                    pyvista_transformed.plot(point_size=1, color="red")
+                    
                     points_patient_world = points_patient_world.T
+                    print(points_patient_world.shape)
                     
 
                     mesh = o3d.io.read_triangle_mesh("C:/Users/Alessandro/Desktop/Neuro/face_3t_mWtextr.obj")
                     filtered_pca = hiddenPointRemoval(mesh)
                     vertices = np.array(filtered_pca.points)  # Transpose for a 3xN matrix
-                    reduction_factor = 1 # Adjust as needed
+                    reduction_factor = 0.5 # Adjust as needed
                     downsampled_points = vertices[np.random.choice(vertices.shape[0], int(reduction_factor * vertices.shape[0]), replace=False)]
                     points_patient_CT = downsampled_points.T
+                    print(points_patient_CT.shape)
 
                     R_pca,t_pca,T_pca = PCA_registration(points_patient_world,points_patient_CT)
                     registered_pca = R_pca @ points_patient_world + t_pca
@@ -415,8 +382,10 @@ if __name__ == '__main__':
                     HOST = "192.168.227.213"
                     PORT = 1000
                     first = 1
+                    
+                    T_CT_to_world = np.linalg.inv(refined_transform)
 
-                    matrixString = '\n'.join([','.join(map(str, row)) for row in refined_transform])
+                    matrixString = '\n'.join([','.join(map(str, row)) for row in T_CT_to_world ])
                     print(matrixString)
 
                     

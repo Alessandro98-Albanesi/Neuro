@@ -347,7 +347,7 @@ if exchangeData==1:
         try:
 
             while True:
-                HOST = "192.168.227.213"  # Standard loopback interface address (localhost) #127.0.0.1 #192.168.0.100
+                HOST = "192.168.0.112"  # Standard loopback interface address (localhost) #127.0.0.1 #192.168.0.100
                 PORT = 1000  # Port to listen on (non-privileged ports are > 1023)
                 first = 1
                 
